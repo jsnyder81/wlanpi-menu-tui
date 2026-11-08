@@ -1,0 +1,131 @@
+## connected
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared                                        shared                                        session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+WLAN Pi                                       WLAN Pi                                       WLAN Pi                                     
+                                                                                                                                        
+  Host:   wlanpi-test                           Host:   wlanpi-test                           Host:   wlanpi-test                       
+  Mode:   classic                               Mode:   classic                               Mode:   classic                           
+  IP:     192.0.2.10                            IP:     192.0.2.10                            IP:     192.0.2.10                        
+  Model:  R4                                    Model:  R4                                    Model:  R4                                
+  Temp:   48.0C                                 Temp:   48.0C                                 Temp:   48.0C                             
+
+## A presses down: home -> menu (B mirrors, N untouched)
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared                                        shared | driven by wlanpi-menu-tui (local:ja  session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Menu                                          Menu                                          WLAN Pi                                     
+                                                                                                                                        
+ > Network ▸                                   > Network ▸                                    Host:   wlanpi-test                       
+   Bluetooth ▸                                   Bluetooth ▸                                  Mode:   classic                           
+   Utils ▸                                       Utils ▸                                      IP:     192.0.2.10                        
+   Apps ▸                                        Apps ▸                                       Model:  R4                                
+   System ▸                                      System ▸                                     Temp:   48.0C                             
+
+## B presses down: B drives the same cursor
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared | driven by wlanpi-menu-tui (local:ja  shared                                        session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Menu                                          Menu                                          WLAN Pi                                     
+                                                                                                                                        
+   Network ▸                                     Network ▸                                    Host:   wlanpi-test                       
+ > Bluetooth ▸                                 > Bluetooth ▸                                  Mode:   classic                           
+   Utils ▸                                       Utils ▸                                      IP:     192.0.2.10                        
+   Apps ▸                                        Apps ▸                                       Model:  R4                                
+   System ▸                                      System ▸                                     Temp:   48.0C                             
+
+## A presses enter: into Bluetooth on both
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared                                        shared | driven by wlanpi-menu-tui (local:ja  session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Bluetooth                                     Bluetooth                                     WLAN Pi                                     
+                                                                                                                                        
+ > Status                                      > Status                                       Host:   wlanpi-test                       
+   Turn On                                       Turn On                                      Mode:   classic                           
+   Turn Off                                      Turn Off                                     IP:     192.0.2.10                        
+   Pair Device                                   Pair Device                                  Model:  R4                                
+                                                                                              Temp:   48.0C                             
+
+## N presses down: its own cursor, A/B untouched
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared                                        shared | driven by wlanpi-menu-tui (local:ja  session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Bluetooth                                     Bluetooth                                     Menu                                        
+                                                                                                                                        
+ > Status                                      > Status                                      > Network ▸                                
+   Turn On                                       Turn On                                       Bluetooth ▸                              
+   Turn Off                                      Turn Off                                      Utils ▸                                  
+   Pair Device                                   Pair Device                                   Apps ▸                                   
+                                                                                               System ▸                                 
+
+## N: down, down, enter, left, up -> back on Network; A/B unchanged
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared                                        shared | driven by wlanpi-menu-tui (local:ja  session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Bluetooth                                     Bluetooth                                     Menu                                        
+                                                                                                                                        
+ > Status                                      > Status                                      > Network ▸                                
+   Turn On                                       Turn On                                       Bluetooth ▸                              
+   Turn Off                                      Turn Off                                      Utils ▸                                  
+   Pair Device                                   Pair Device                                   Apps ▸                                   
+                                                                                               System ▸                                 
+
+## A: left, up, enter, down x5 -> Network > LLDP Neighbour
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared                                        shared | driven by wlanpi-menu-tui (local:ja  session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Network                                       Network                                       Menu                                        
+                                                                                                                                        
+   Interfaces                                    Interfaces                                  > Network ▸                                
+   WLAN Interfaces                               WLAN Interfaces                               Bluetooth ▸                              
+   Adapters                                      Adapters                                      Utils ▸                                  
+   Eth0 IP Config                                Eth0 IP Config                                Apps ▸                                   
+   Eth0 VLAN                                     Eth0 VLAN                                     System ▸                                 
+ > LLDP Neighbour                              > LLDP Neighbour                                                                         
+   CDP Neighbour                                 CDP Neighbour                                                                          
+   Public IPv4                                   Public IPv4                                                                            
+   Public IPv6                                   Public IPv6                                                                            
+
+## A presses enter: LLDP runs, result mirrored on B
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared                                        shared | driven by wlanpi-menu-tui (local:ja  session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+LLDP Neighbour  (page 1/1)                    LLDP Neighbour  (page 1/1)                    Menu                                        
+                                                                                                                                        
+  Name:  sw1                                    Name:  sw1                                   > Network ▸                                
+  Port:  Gi1/0/7                                Port:  Gi1/0/7                                 Bluetooth ▸                              
+                                                                                               Utils ▸                                  
+                                                                                               Apps ▸                                   
+                                                                                               System ▸                                 
+
+## B presses left: back to the menu on both
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared | driven by wlanpi-menu-tui (local:ja  shared                                        session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Network                                       Network                                       Menu                                        
+                                                                                                                                        
+   Interfaces                                    Interfaces                                  > Network ▸                                
+   WLAN Interfaces                               WLAN Interfaces                               Bluetooth ▸                              
+   Adapters                                      Adapters                                      Utils ▸                                  
+   Eth0 IP Config                                Eth0 IP Config                                Apps ▸                                   
+   Eth0 VLAN                                     Eth0 VLAN                                     System ▸                                 
+ > LLDP Neighbour                              > LLDP Neighbour                                                                         
+   CDP Neighbour                                 CDP Neighbour                                                                          
+   Public IPv4                                   Public IPv4                                                                            
+   Public IPv6                                   Public IPv6                                                                            
+
+## N presses enter: opens Network on N only
+TUI-A (attach)                                TUI-B (attach)                                TUI-N (--session new)                       
+shared | driven by wlanpi-menu-tui (local:ja  shared                                        session:SZUodfVh8w8VzfzYK                   
+--------------------------------------------  --------------------------------------------  --------------------------------------------
+Network                                       Network                                       Network                                     
+                                                                                                                                        
+   Interfaces                                    Interfaces                                  > Interfaces                               
+   WLAN Interfaces                               WLAN Interfaces                               WLAN Interfaces                          
+   Adapters                                      Adapters                                      Adapters                                 
+   Eth0 IP Config                                Eth0 IP Config                                Eth0 IP Config                           
+   Eth0 VLAN                                     Eth0 VLAN                                     Eth0 VLAN                                
+ > LLDP Neighbour                              > LLDP Neighbour                                LLDP Neighbour                           
+   CDP Neighbour                                 CDP Neighbour                                 CDP Neighbour                            
+   Public IPv4                                   Public IPv4                                   Public IPv4                              
+   Public IPv6                                   Public IPv6                                   Public IPv6                              

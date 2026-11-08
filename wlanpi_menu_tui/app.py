@@ -23,6 +23,7 @@ from wlanpi_menu_tui.protocol import (
     DEFAULT_TOPICS,
     FATAL_CLOSE_CODES,
     FATAL_ERROR_CODES,
+    SESSION_DEFAULT,
     SUPPORTED_BLOCKS,
     JobState,
     MenuTreeState,
@@ -37,6 +38,40 @@ from wlanpi_menu_tui.protocol import (
 )
 
 log = logging.getLogger(__name__)
+
+# Thin-mode keyboard to input-frame keys.
+THIN_KEY_MAP: dict[str, str] = {
+    "up": "up",
+    "down": "down",
+    "left": "left",
+    "right": "right",
+    "enter": "center",
+    "space": "center",
+    "f1": "key1",
+    "1": "key1",
+    "f2": "key2",
+    "2": "key2",
+    "f3": "key3",
+    "3": "key3",
+}
+
+# Prompt kinds a thin client answers on the shared screen with input frames.
+# string and form prompts need a keyboard, so the TUI edits those locally.
+SHARED_SCREEN_PROMPTS = ("select", "confirm", "integer")
+
+
+def describe_driver(driven_by: dict[str, Any]) -> str:
+    """'wlanpi-webui (webui:alice)' for a view.driven_by object."""
+    principal = driven_by.get("principal") or {}
+    who = f"{principal.get('kind', '?')}:{principal.get('name', '?')}"
+    surface = driven_by.get("surface")
+    return f"{surface} ({who})" if surface else who
+
+
+def describe_principal(principal: dict[str, Any] | None) -> str:
+    if not principal:
+        return "the user who started it"
+    return f"{principal.get('kind', '?')}:{principal.get('name', '?')}"
 
 
 class MainScroll(ScrollableContainer, can_focus=False):
@@ -105,9 +140,13 @@ class MenuTuiApp(App[None]):
         subscribe_topics: list[str] | None = None,
         reconnect_delay: float = 0.5,
         protocol_versions: list[int] | None = None,
+        session: str = SESSION_DEFAULT,
     ) -> None:
         super().__init__()
         self.socket_path = socket_path
+        # hello.session: "default" attaches to the shared default session
+        # (mirror and drive the panel's screen), "new" opens our own.
+        self.session_request = session
         self.supported_blocks = list(supported_blocks)
         self.subscribe_topics = list(subscribe_topics if subscribe_topics is not None else DEFAULT_TOPICS)
         self.reconnect_delay = reconnect_delay
@@ -121,6 +160,7 @@ class MenuTuiApp(App[None]):
 
         # Session & reconnect state
         self.session_id: str | None = None
+        self.session_kind: str | None = None  # welcome.session
         self.epoch: str | None = None
         self.principal: dict[str, Any] | None = None
         self.roles: list[str] = []
@@ -131,6 +171,11 @@ class MenuTuiApp(App[None]):
         self.menu_tree: MenuTreeState | None = None
         self.current_view: dict[str, Any] | None = None
         self.active_prompt: dict[str, Any] | None = None
+        # Default session: the last prompt frame answered on the shared screen
+        # (select/confirm/integer), kept for its invoked_by principal.
+        self.shared_prompt: dict[str, Any] | None = None
+        # One-line local notice (for example why a key did nothing).
+        self.notice: str | None = None
         self.jobs: dict[str, JobState] = {}
         self.active_job_id: str | None = None
         self._pending_page_req_ids: set[str] = set()
@@ -222,6 +267,7 @@ class MenuTuiApp(App[None]):
                         blocks=self.supported_blocks,
                         resume=resume,
                         protocol=self.protocol_versions,
+                        session=self.session_request,
                     )
                     await self._send_frame(hello)
 
@@ -287,6 +333,8 @@ class MenuTuiApp(App[None]):
         if ftype == "welcome":
             old_epoch = self.epoch
             self.session_id = frame.get("session_id")
+            # A server that predates welcome.session only had independent sessions.
+            self.session_kind = frame.get("session") or "new"
             self.epoch = frame.get("epoch")
             self.principal = frame.get("principal")
             self.roles = list(frame.get("roles", []))
@@ -312,7 +360,15 @@ class MenuTuiApp(App[None]):
                 self.display_mode = "menu_only"
 
         elif ftype == "view":
+            prev_screen = self.current_view.get("screen") if self.current_view else None
             self.current_view = frame
+            if self.attached and frame.get("screen") != "prompt":
+                # Another surface answered (or cancelled) the prompt: the
+                # shared screen moved on, so drop any local prompt editor.
+                self.active_prompt = None
+                self.shared_prompt = None
+            if frame.get("screen") != prev_screen:
+                self.notice = None
             # Initialise any confirm block default selection
             for block in frame.get("blocks", []):
                 if block.get("type") == "confirm":
@@ -329,8 +385,13 @@ class MenuTuiApp(App[None]):
                 self.display_mode = "view"
 
         elif ftype == "prompt":
-            self._init_prompt_state(frame)
-            self.display_mode = "prompt"
+            if self.attached and frame.get("kind") in SHARED_SCREEN_PROMPTS:
+                # Answered on the shared screen through view + input, so every
+                # attached surface sees the same highlight.
+                self.shared_prompt = frame
+            else:
+                self._init_prompt_state(frame)
+                self.display_mode = "prompt"
 
         elif ftype == "job":
             job_id = str(frame["job_id"])
@@ -378,6 +439,27 @@ class MenuTuiApp(App[None]):
                 self._stop_reconnect = True
 
         self._refresh_ui()
+
+    @property
+    def attached(self) -> bool:
+        """True when attached to the shared default session (mirror mode)."""
+        return self.session_kind == "default"
+
+    def _driver_hint(self) -> str | None:
+        """'driven by …' when another surface produced the current view."""
+        view = self.current_view
+        if not self.attached or not view:
+            return None
+        driven_by = view.get("driven_by")
+        if not isinstance(driven_by, dict) or driven_by.get("self"):
+            return None
+        return f"driven by {describe_driver(driven_by)}"
+
+    def _shared_prompt_invoker(self) -> str:
+        prompt = self.shared_prompt
+        if prompt and self.current_view and prompt.get("job_id") == self.current_view.get("job_id"):
+            return describe_principal(prompt.get("invoked_by"))
+        return describe_principal(None)
 
     def _init_prompt_state(self, prompt: dict[str, Any]) -> None:
         self.active_prompt = prompt
@@ -438,7 +520,9 @@ class MenuTuiApp(App[None]):
         parts: list[str] = ["[bold]WLAN Pi[/bold]"]
         if self.menu_tree and self.menu_tree.device_mode:
             parts.append(f"mode:{escape(self.menu_tree.device_mode)}")
-        if self.session_id:
+        if self.session_kind == "default":
+            parts.append("[bold magenta]shared[/bold magenta]")
+        elif self.session_id:
             parts.append(f"session:{escape(self.session_id)}")
         if self.resumed is True:
             parts.append("[green]resumed[/green]")
@@ -458,6 +542,10 @@ class MenuTuiApp(App[None]):
             parts.append(f"job:{escape(job.node)}")
         elif self.display_mode == "prompt" and self.active_prompt:
             parts.append(f"prompt:{escape(str(self.active_prompt.get('title', '')))}")
+
+        hint = self._driver_hint()
+        if hint:
+            parts.append(f"[magenta]{escape(hint)}[/magenta]")
 
         return "  │  ".join(parts)
 
@@ -739,6 +827,8 @@ class MenuTuiApp(App[None]):
         status_line = "  │  ".join(line1_parts) if line1_parts else "[dim]Status: waiting for events[/dim]"
 
         hint_parts: list[str] = []
+        if self.notice:
+            hint_parts.append(f"[yellow]{escape(self.notice)}[/yellow]")
         if self.current_view and isinstance(self.current_view.get("hints"), dict):
             for k, v in self.current_view["hints"].items():
                 hint_parts.append(f"[bold]{escape(str(k))}[/bold]:{escape(str(v))}")
@@ -795,7 +885,17 @@ class MenuTuiApp(App[None]):
             await self._handle_prompt_key(event)
             return
 
-        # 2. Inline confirm block (in view or job result)
+        # 2. Default session: a prompt shown on the shared screen.
+        if (
+            self.attached
+            and self.display_mode == "view"
+            and self.current_view is not None
+            and self.current_view.get("screen") == "prompt"
+            and await self._handle_shared_prompt_key(event)
+        ):
+            return
+
+        # 3. Inline confirm block (in view or job result)
         confirm_block = self._find_inline_confirm_block()
         if confirm_block is not None:
             pid = str(confirm_block["prompt_id"])
@@ -824,7 +924,7 @@ class MenuTuiApp(App[None]):
                 )
                 return
 
-        # 3. Cancel an in-flight job with c/Escape, whether it is shown from
+        # 4. Cancel an in-flight job with c/Escape, whether it is shown from
         #    job frames or from the server's thin-mode busy view.
         if key in ("escape", "c"):
             job_to_cancel = self._cancellable_job()
@@ -833,7 +933,7 @@ class MenuTuiApp(App[None]):
                 await self._send_frame(build_cancel(self._next_id(), job_to_cancel.job_id))
                 return
 
-        # 4. Job result up/down paging via page frames (only when the job is
+        # 5. Job result up/down paging via page frames (only when the job is
         #    rendered from job frames; view-driven jobs page via thin input).
         if self.display_mode == "job" and self.active_job_id and self.active_job_id in self.jobs:
             job = self.jobs[self.active_job_id]
@@ -856,25 +956,50 @@ class MenuTuiApp(App[None]):
                         self._refresh_ui()
                         return
 
-        # 5. Thin-mode keyboard to input frame mapping
-        key_map = {
-            "up": "up",
-            "down": "down",
-            "left": "left",
-            "right": "right",
-            "enter": "center",
-            "space": "center",
-            "f1": "key1",
-            "1": "key1",
-            "f2": "key2",
-            "2": "key2",
-            "f3": "key3",
-            "3": "key3",
-        }
-        mapped = key_map.get(key)
+        # 6. Thin-mode keyboard to input frame mapping
+        mapped = THIN_KEY_MAP.get(key)
         if mapped is not None:
             event.stop()
             await self._send_frame(build_input(self._next_id(), mapped))
+
+    async def _handle_shared_prompt_key(self, event: events.Key) -> bool:
+        """Keys on a default-session prompt screen. Returns True when handled.
+
+        The prompt is answered through the shared cursor (input frames), so
+        every attached surface sees the same highlight. A confirmation belongs
+        to the principal that invoked it: when this connection may not answer
+        (view.answerable is false) keys only explain why, and c/Escape do not
+        cancel it.
+        """
+        view = self.current_view or {}
+        key = event.key
+        if view.get("answerable") is False:
+            if key in THIN_KEY_MAP or key in ("escape", "c", "y", "n"):
+                event.stop()
+                self.notice = f"Only {self._shared_prompt_invoker()} can answer this confirmation"
+                self._refresh_ui()
+                return True
+            return False
+        if key in ("escape", "c"):
+            event.stop()
+            await self._send_frame(build_input(self._next_id(), "left"))  # cancel on the shared screen
+            return True
+        confirm = next((b for b in view.get("blocks", []) if b.get("type") == "confirm"), None)
+        if confirm is not None:
+            pid = str(confirm.get("prompt_id", ""))
+            if key in ("left", "right"):
+                event.stop()
+                await self._send_frame(build_input(self._next_id(), "down"))  # toggle the shared highlight
+                return True
+            if key in ("enter", "space"):
+                event.stop()
+                await self._send_frame(build_input(self._next_id(), "center"))  # answer the shared highlight
+                return True
+            if key in ("y", "n") and pid:
+                event.stop()
+                await self._send_frame(build_answer(self._next_id(), pid, confirmed=key == "y"))
+                return True
+        return False
 
     async def _handle_prompt_key(self, event: events.Key) -> None:
         prompt = self.active_prompt

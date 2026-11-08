@@ -5,9 +5,29 @@ Textual thin-mode surface client for `wlanpi-menud`.
 Connects to `/run/wlanpi-menud/local.sock` (or `--socket <path>`) over a single
 push WebSocket speaking the `wlanpi-menud` protocol v1.
 
+## Sessions
+
+```
+wlanpi-menu-tui                  # attach to the shared default session (the default)
+wlanpi-menu-tui --session new    # an independent session with its own cursor
+```
+
+- **Attached** (`--session default`, also `WLANPI_MENUD_SESSION`): the TUI
+  shows the service's default session, the same screen as the panel, the WebUI
+  mirror and every other attached TUI. It renders each `view` as it arrives,
+  whoever drove it, and the header shows `shared` and `driven by <surface>
+  (<principal>)` when another surface made the last move. Keys drive the one
+  shared cursor (last write wins). Select, confirm and integer prompts are
+  answered on the shared screen, so every surface sees the same highlight.
+  A confirmation another principal started is shown but not answerable: keys,
+  including `c`/Escape, only explain who can answer it.
+- **Independent** (`--session new`): a private cursor, prompts and jobs, as
+  before.
+
 ## Features
 
-- **Thin-mode handshake**: Sends `hello` (`mode="thin"`) with screen, colour,
+- **Thin-mode handshake**: Sends `hello` (`mode="thin"`, plus `session: "new"`
+  for an independent session) with screen, colour,
   block and key capabilities, plus `resume` state (`epoch`, `session_id`,
   per-topic `seq`, `menu_revision`) on reconnect.
 - **View block rendering**: Renders `text`, `kv`, `table`, `list`, `qr` (as

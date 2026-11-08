@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 from wlanpi_menu_tui import __version__
 from wlanpi_menu_tui.app import MenuTuiApp
-from wlanpi_menu_tui.protocol import DEFAULT_SOCKET_PATH
+from wlanpi_menu_tui.protocol import DEFAULT_SOCKET_PATH, SESSION_DEFAULT, SESSION_KINDS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +23,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Path to wlanpi-menud Unix domain socket (default: {DEFAULT_SOCKET_PATH})",
     )
     parser.add_argument(
+        "--session",
+        choices=SESSION_KINDS,
+        default=os.environ.get("WLANPI_MENUD_SESSION", SESSION_DEFAULT),
+        help="default: attach to the shared default session and mirror whatever the panel, "
+        "WebUI or another TUI shows (the default). new: an independent session with its own cursor.",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -33,6 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING)
     args = build_parser().parse_args(argv)
-    app = MenuTuiApp(socket_path=args.socket)
+    app = MenuTuiApp(socket_path=args.socket, session=args.session)
     app.run()
     return 0

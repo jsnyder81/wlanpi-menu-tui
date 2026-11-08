@@ -156,6 +156,10 @@ class StubMenudServer:
 
         # Configurable handshake & topic state
         self.handshake_error: dict[str, Any] | None = None
+        # welcome.session echoes hello.session (thin default: "default"), as
+        # wlanpi-menud does; legacy_welcome leaves it out like a pre-sessions server.
+        self.legacy_welcome: bool = False
+        self.session_kind: str | None = None
         self.force_resnapshot: bool = False
         self.send_initial_view: bool = True
         self.initial_view: dict[str, Any] | None = None
@@ -324,6 +328,7 @@ class StubMenudServer:
                 ):
                     resumed = True
 
+            self.session_kind = frame.get("session") or ("default" if frame["mode"] == "thin" else "new")
             welcome = {
                 "v": 1,
                 "type": "welcome",
@@ -345,6 +350,8 @@ class StubMenudServer:
                     "max_frame_bytes": 262144,
                 },
             }
+            if not self.legacy_welcome:
+                welcome["session"] = self.session_kind
             await self.send_frame(welcome)
 
             if not resumed:

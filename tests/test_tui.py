@@ -246,7 +246,7 @@ async def test_keyboard_to_input_mapping(tmp_path: Path) -> None:
 async def test_prompt_flows_select_confirm_and_form(tmp_path: Path) -> None:
     sock = tmp_path / "local.sock"
     async with StubMenudServer(sock) as stub:
-        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05, session="new")
         async with app.run_test(size=(80, 24)) as pilot:
             await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
 
@@ -619,7 +619,7 @@ async def test_readable_error_frames_version_auth_and_conflict(tmp_path: Path) -
 async def test_integer_string_prompts_and_job_cancel(tmp_path: Path) -> None:
     sock = tmp_path / "local.sock"
     async with StubMenudServer(sock) as stub:
-        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05, session="new")
         async with app.run_test(size=(80, 24)) as pilot:
             await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
 
@@ -802,7 +802,7 @@ async def test_recorded_pilot_dump_menu_to_result_to_confirm(tmp_path: Path) -> 
 
     async with StubMenudServer(sock) as stub:
         stub.on_client_frame = _scripted_flow
-        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05, session="new")
         async with app.run_test(size=(84, 26)) as pilot:
             await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
             await _wait_until(lambda: "Main Menu" in _widget_text(app, "#screen-view"))

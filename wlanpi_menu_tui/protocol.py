@@ -41,6 +41,12 @@ DEFAULT_TOPICS: list[str] = [
 
 MAX_CACHED_RESULT_PAGES = 4
 
+# hello.session: attach to wlanpi-menud's persistent default session (the
+# shared screen the panel shows) or open an independent session.
+SESSION_DEFAULT = "default"
+SESSION_NEW = "new"
+SESSION_KINDS = (SESSION_DEFAULT, SESSION_NEW)
+
 FATAL_CLOSE_CODES = {1008, 4400, 4401, 4426}
 FATAL_ERROR_CODES = {"AUTH_FAILED", "VERSION"}
 
@@ -75,8 +81,16 @@ def build_hello(
     keys: list[str] | None = None,
     resume: ResumeState | None = None,
     protocol: list[int] | None = None,
+    session: str = SESSION_DEFAULT,
 ) -> dict[str, Any]:
-    """Build a C->S hello frame for thin mode."""
+    """Build a C->S hello frame for thin mode.
+
+    ``session="default"`` is what a thin hello means without the field, so it
+    is left out (a server that predates ``hello.session`` still accepts the
+    frame); ``session="new"`` asks for an independent session.
+    """
+    if session not in SESSION_KINDS:
+        raise ValueError(f"Unsupported session kind: {session!r}")
     frame: dict[str, Any] = {
         "v": PROTOCOL_VERSION,
         "type": "hello",
@@ -97,6 +111,8 @@ def build_hello(
             "keys": list(keys if keys is not None else SUPPORTED_KEYS),
         },
     }
+    if session != SESSION_DEFAULT:
+        frame["session"] = session
     if resume is not None:
         frame["resume"] = resume.to_payload()
     return frame
