@@ -1,0 +1,8 @@
+tar-ignore = .venv
+tar-ignore = .pytest_cache
+tar-ignore = .ruff_cache
+tar-ignore = *.egg-info
+tar-ignore = __pycache__
+tar-ignore = *.pyc
+tar-ignore = *.deb
+tar-ignore = build

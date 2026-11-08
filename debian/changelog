@@ -1,0 +1,8 @@
+wlanpi-menu-tui (0.1.0) unstable; urgency=medium
+
+  * Initial release: Textual thin-mode client for wlanpi-menud protocol
+    v1.
+  * Debian packaging: dh-virtualenv under /opt/wlanpi-menu-tui (Python
+    3.13), /usr/bin/wlanpi-menu-tui link, no systemd unit.
+
+ -- Jake Snyder <jsnyder81@gmail.com>  Sun, 08 Nov 2026 20:36:37 +0000

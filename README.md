@@ -46,3 +46,31 @@ wlanpi-menu-tui --session new    # an independent session with its own cursor
   accepts full resnapshots when `resumed` is `false`, detects sequence gaps, and
   presents readable diagnostics for protocol errors including `VERSION` and
   `AUTH_FAILED`.
+
+## Installation
+
+`wlanpi-menu-tui` ships as a Debian package built with dh-virtualenv. It is a
+user-run client with no systemd unit.
+
+```sh
+sudo apt install ./wlanpi-menu-tui_<version>_arm64.deb
+sudo usermod -aG wlanpi-menud "$USER"   # local.sock is 0660, group wlanpi-menud; log in again
+wlanpi-menu-tui                          # or: wlanpi-menu-tui --socket <path>
+```
+
+| Path | What |
+| --- | --- |
+| `/opt/wlanpi-menu-tui/` | Private Python 3.13 virtualenv |
+| `/usr/bin/wlanpi-menu-tui` | Link to the venv entry point |
+
+## Building the Package
+
+```sh
+./build-package-native.sh        # Debian trixie container (podman or docker), runs lintian
+ls dist/                         # wlanpi-menu-tui_<version>_<arch>.deb, lintian.txt
+```
+
+## Releases
+
+Versions live in `debian/changelog` and match `pyproject.toml`. Add an entry
+with `dch -i` (set `DEBFULLNAME` and `DEBEMAIL` first).
