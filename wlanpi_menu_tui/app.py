@@ -39,6 +39,16 @@ from wlanpi_menu_tui.protocol import (
 log = logging.getLogger(__name__)
 
 
+class MainScroll(ScrollableContainer, can_focus=False):
+    """Scroll pane for the main screen + menu tree.
+
+    Not focusable: arrow keys belong to the thin-mode ``input`` mapping in
+    ``MenuTuiApp.on_key``. A focused ScrollableContainer also consumes
+    up/down as scroll bindings, so on a tall menu tree every navigation
+    press scrolled the pane and pushed the result view off-screen.
+    """
+
+
 class MenuTuiApp(App[None]):
     """Textual thin-mode surface connecting to wlanpi-menud over local.sock."""
 
@@ -130,7 +140,7 @@ class MenuTuiApp(App[None]):
 
         # Interactive prompt state
         self.prompt_cursor: int = 0
-        self.prompt_confirm_choice: str = "confirm"
+        self.prompt_confirm_choice: str = "cancel"
         self.prompt_scalar_value: str = ""
         self.prompt_field_idx: int = 0
         self.prompt_form_values: dict[str, Any] = {}
@@ -141,6 +151,12 @@ class MenuTuiApp(App[None]):
         self.topic_data: dict[str, Any] = {}
         self.stale_topics: set[str] = set()
 
+        # Last rendered main-screen markup (scroll reset on change)
+        self._last_main_text: str | None = None
+        # Jobs whose lifecycle the server renders via thin-mode ``view``
+        # frames (wlanpi-menud sends job + view for every transition).
+        self._view_driven_jobs: set[str] = set()
+
         # Error state
         self.last_error: dict[str, Any] | None = None
         self.fatal_error: bool = False
@@ -148,7 +164,7 @@ class MenuTuiApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Static("WLAN Pi Menu TUI — Connecting...", id="header-bar")
         yield Static("", id="error-banner")
-        with ScrollableContainer(id="main-scroll"):
+        with MainScroll(id="main-scroll"):
             yield Static("Connecting to wlanpi-menud...", id="screen-view")
             yield Static("", id="menu-tree-view")
         yield Static("Waiting for status topics...", id="status-footer")
@@ -283,6 +299,7 @@ class MenuTuiApp(App[None]):
                     self.topic_seq.clear()
                     self.stale_topics.clear()
                     self.jobs.clear()
+                    self._view_driven_jobs.clear()
                     self.active_job_id = None
                 # Subscribe on initial connect or if no topics were tracked yet
                 if not had_resume or not self.topic_seq:
@@ -302,6 +319,12 @@ class MenuTuiApp(App[None]):
                     pid = str(block.get("prompt_id", ""))
                     if pid:
                         self.confirm_selection[pid] = str(block.get("selected") or "cancel")
+            view_job = frame.get("job_id")
+            if view_job and frame.get("screen") in ("busy", "result"):
+                # Server is driving this job's screen in thin mode: render and
+                # page from view frames; job frames only update JobState.
+                self._view_driven_jobs.add(str(view_job))
+                self.active_job_id = str(view_job)
             if self.active_prompt is None:
                 self.display_mode = "view"
 
@@ -330,7 +353,7 @@ class MenuTuiApp(App[None]):
                         if pid and pid not in self.confirm_selection:
                             self.confirm_selection[pid] = str(block.get("selected") or "cancel")
 
-            if self.active_prompt is None:
+            if self.active_prompt is None and job_id not in self._view_driven_jobs:
                 self.display_mode = "job"
 
         elif ftype == "event":
@@ -359,7 +382,9 @@ class MenuTuiApp(App[None]):
     def _init_prompt_state(self, prompt: dict[str, Any]) -> None:
         self.active_prompt = prompt
         self.prompt_cursor = 0
-        self.prompt_confirm_choice = "confirm"
+        # Destructive confirmations default to Cancel (frames.schema.json
+        # confirm_block.selected default; wlanpi-menud prompt_index 0).
+        self.prompt_confirm_choice = "cancel"
         self.prompt_field_idx = 0
         self.prompt_form_values = {}
 
@@ -399,7 +424,13 @@ class MenuTuiApp(App[None]):
             return
         self.query_one("#header-bar", Static).update(self._render_header())
         self._update_error_banner()
-        self.query_one("#screen-view", Static).update(self._render_main_screen())
+        main_text = self._render_main_screen()
+        if main_text != self._last_main_text:
+            self._last_main_text = main_text
+            self.query_one("#screen-view", Static).update(main_text)
+            # Keep the active screen (menu/result/prompt) in view; the menu
+            # tree below it is reference only.
+            self.query_one("#main-scroll", MainScroll).scroll_home(animate=False)
         self.query_one("#menu-tree-view", Static).update(self._render_menu_tree_section())
         self.query_one("#status-footer", Static).update(self._render_status_footer())
 
@@ -683,13 +714,14 @@ class MenuTuiApp(App[None]):
         if isinstance(complications, list):
             for comp in complications:
                 if isinstance(comp, dict):
+                    # wlanpi-menud publishes {app_id, label, value, status}
+                    label = comp.get("label") or comp.get("key")
+                    value = comp.get("value")
                     txt = comp.get("text")
-                    if txt:
+                    if label and value is not None and value != "":
+                        line1_parts.append(f"[cyan]{escape(str(label))}: {escape(str(value))}[/cyan]")
+                    elif txt:
                         line1_parts.append(f"[cyan]{escape(str(txt))}[/cyan]")
-                    elif comp.get("key") and comp.get("value"):
-                        line1_parts.append(
-                            f"[cyan]{escape(str(comp['key']))}: {escape(str(comp['value']))}[/cyan]"
-                        )
 
         alerts = self.topic_data.get("alerts")
         if isinstance(alerts, list) and alerts:
@@ -731,6 +763,23 @@ class MenuTuiApp(App[None]):
         for block in blocks:
             if block.get("type") == "confirm" and block.get("prompt_id"):
                 return block
+        return None
+
+    def _cancellable_job(self) -> JobState | None:
+        """Return the active job if it is queued/running and on screen."""
+        job = self.jobs.get(self.active_job_id) if self.active_job_id else None
+        if job is None or job.state not in ("queued", "progress"):
+            return None
+        if self.display_mode == "job":
+            return job
+        view = self.current_view
+        if (
+            self.display_mode == "view"
+            and view is not None
+            and view.get("screen") in ("busy", "result")
+            and view.get("job_id", job.job_id) == job.job_id
+        ):
+            return job
         return None
 
     async def on_key(self, event: events.Key) -> None:
@@ -775,7 +824,17 @@ class MenuTuiApp(App[None]):
                 )
                 return
 
-        # 3. Job result up/down paging via page frames & job cancellation
+        # 3. Cancel an in-flight job with c/Escape, whether it is shown from
+        #    job frames or from the server's thin-mode busy view.
+        if key in ("escape", "c"):
+            job_to_cancel = self._cancellable_job()
+            if job_to_cancel is not None:
+                event.stop()
+                await self._send_frame(build_cancel(self._next_id(), job_to_cancel.job_id))
+                return
+
+        # 4. Job result up/down paging via page frames (only when the job is
+        #    rendered from job frames; view-driven jobs page via thin input).
         if self.display_mode == "job" and self.active_job_id and self.active_job_id in self.jobs:
             job = self.jobs[self.active_job_id]
             if job.state == "result":
@@ -796,12 +855,8 @@ class MenuTuiApp(App[None]):
                     if job.step_up():
                         self._refresh_ui()
                         return
-            elif job.state in ("queued", "progress") and key in ("escape", "c"):
-                event.stop()
-                await self._send_frame(build_cancel(self._next_id(), job.job_id))
-                return
 
-        # 4. Thin-mode keyboard to input frame mapping
+        # 5. Thin-mode keyboard to input frame mapping
         key_map = {
             "up": "up",
             "down": "down",

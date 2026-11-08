@@ -75,7 +75,7 @@ async def test_handshake_subscribe_and_status_footer(tmp_path: Path) -> None:
             assert "wlanpi-stub" in footer_txt
             assert "192.0.2.10" in footer_txt
             assert "46.5C" in footer_txt
-            assert "Uplink OK" in footer_txt
+            assert "Uplink: OK" in footer_txt
             assert "Low battery 15%" in footer_txt
 
             tree_txt = _widget_text(app, "#menu-tree-view")
@@ -302,10 +302,24 @@ async def test_prompt_flows_select_confirm_and_form(tmp_path: Path) -> None:
             await stub.send_frame(confirm_prompt)
             await _wait_until(lambda: "Reboot the WLAN Pi now?" in _widget_text(app, "#screen-view"))
 
+            # m1 regression: destructive confirm defaults to Cancel, so a bare
+            # Enter must NOT confirm.
+            assert app.prompt_confirm_choice == "cancel"
             start_idx = len(stub.received_frames)
             await pilot.press("enter")
             ans_confirm = await stub.wait_for_frame(
                 lambda f: f["type"] == "answer" and f["prompt_id"] == "p91c3",
+                start_index=start_idx,
+            )
+            assert ans_confirm["confirmed"] is False
+
+            # Explicitly toggling to Confirm then Enter confirms.
+            await stub.send_frame({**confirm_prompt, "id": stub.next_server_id(), "prompt_id": "p91c3b"})
+            await _wait_until(lambda: app.active_prompt is not None and app.active_prompt["prompt_id"] == "p91c3b")
+            start_idx = len(stub.received_frames)
+            await pilot.press("right", "enter")
+            ans_confirm = await stub.wait_for_frame(
+                lambda f: f["type"] == "answer" and f["prompt_id"] == "p91c3b",
                 start_index=start_idx,
             )
             assert ans_confirm["confirmed"] is True
@@ -829,11 +843,246 @@ async def test_recorded_pilot_dump_menu_to_result_to_confirm(tmp_path: Path) -> 
             assert "Reboot the WLAN Pi now?" in confirm_dump
             assert "[Reboot]" in confirm_dump
 
-            # Confirm the prompt with enter
-            await pilot.press("enter")
+            # Cancel is the default; toggle to Reboot, then confirm with enter
+            start_idx = len(stub.received_frames)
+            await pilot.press("right", "enter")
+            ans = await stub.wait_for_frame(
+                lambda f: f["type"] == "answer" and f["prompt_id"] == "p7002", start_index=start_idx
+            )
+            assert ans["confirmed"] is True
             await _wait_until(
                 lambda: "Rebooting WLAN Pi now..." in _widget_text(app, "#screen-view")
             )
             post_confirm_dump = _widget_text(app, "#screen-view")
             assert "Reboot Confirmed" in post_confirm_dump
             assert "Rebooting WLAN Pi now..." in post_confirm_dump
+
+
+# ----------------------------------------------------------------------
+# Regression tests for phase1-review findings M1, M2, m1 and the 32-row
+# layout bug found on-device. These mirror the real wlanpi-menud frame
+# sequences rather than the simplified single-frame stub replies.
+# ----------------------------------------------------------------------
+
+
+def _busy_view(stub: StubMenudServer, job_id: str, node: str, text: str) -> dict[str, Any]:
+    return {
+        "v": 1,
+        "type": "view",
+        "id": stub.next_server_id(),
+        "screen": "busy",
+        "node": node,
+        "title": "Speedtest",
+        "job_id": job_id,
+        "blocks": [{"type": "progress", "pct": None, "label": text, "text": text}],
+        "hints": {"left": "Back"},
+    }
+
+
+def _job(stub: StubMenudServer, job_id: str, node: str, state: str, **extra: Any) -> dict[str, Any]:
+    return {"v": 1, "type": "job", "id": stub.next_server_id(), "job_id": job_id, "node": node,
+            "state": state, **extra}
+
+
+async def test_m1_dual_job_view_emission_keeps_cancel_reachable(tmp_path: Path) -> None:
+    """M1: job + view for the same transition must not disable c/Escape cancel."""
+    sock = tmp_path / "local.sock"
+    node = "utils.speedtest.run"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
+
+            for job_id, key in (("jcancel-c", "c"), ("jcancel-esc", "escape")):
+                await stub.send_job_transition(
+                    _job(stub, job_id, node, "queued", shared=False),
+                    _busy_view(stub, job_id, node, "Starting…"),
+                )
+                await stub.send_job_transition(
+                    _job(stub, job_id, node, "progress", progress={"pct": None, "message": "Testing download"}),
+                    _busy_view(stub, job_id, node, "Testing download"),
+                )
+                await _wait_until(
+                    lambda jid=job_id: app.jobs.get(jid) is not None and app.jobs[jid].state == "progress"
+                    and "Testing download" in _widget_text(app, "#screen-view")
+                )
+                # The trailing view frame wins the screen, but the job stays
+                # active and cancellable.
+                assert app.display_mode == "view"
+                assert app.active_job_id == job_id
+
+                start_idx = len(stub.received_frames)
+                await pilot.press(key)
+                cancel = await stub.wait_for_frame(
+                    lambda f: f["type"] == "cancel", start_index=start_idx
+                )
+                assert cancel["job_id"] == job_id
+                # No thin input should have been sent for c/Escape
+                assert not any(f["type"] == "input" for f in stub.received_frames[start_idx:])
+
+                # Server: job cancelled + cursor back to the menu view
+                await stub.send_job_transition(
+                    _job(stub, job_id, node, "cancelled"),
+                    {"v": 1, "type": "view", "id": stub.next_server_id(), "screen": "menu", "node": "utils",
+                     "title": "Utils", "blocks": [{"type": "list", "selected": 0, "text": "> Speedtest",
+                                                    "items": [{"label": "Speedtest", "node": node}]}]},
+                )
+                await _wait_until(lambda: app.current_view is not None and app.current_view["screen"] == "menu")
+
+            # On a plain menu view (no live job) c/Escape send nothing
+            start_idx = len(stub.received_frames)
+            await pilot.press("c", "escape")
+            await pilot.pause(0.1)
+            assert not any(f["type"] == "cancel" for f in stub.received_frames[start_idx:])
+
+
+async def test_m1_dual_job_view_result_pages_via_thin_input_only(tmp_path: Path) -> None:
+    """M1: a view-driven result pages through thin input, never page frames."""
+    sock = tmp_path / "local.sock"
+    node = "apps.scanner.scan"
+    job_id = "j-scan"
+
+    def result_view(idx: int, frame_id: str) -> dict[str, Any]:
+        return {
+            "v": 1, "type": "view", "id": frame_id, "screen": "result", "node": node, "title": "Wi-Fi Scan",
+            "job_id": job_id, "page": {"index": idx, "count": 3, "more": idx < 2},
+            "blocks": [{"type": "text", "text": f"Live Scan Page {idx + 1}"}],
+        }
+
+    page = {"idx": 0}
+
+    async def on_input(server: StubMenudServer, frame: dict[str, Any]) -> None:
+        if frame["type"] == "input" and frame["key"] in ("up", "down"):
+            page["idx"] = max(0, min(2, page["idx"] + (1 if frame["key"] == "down" else -1)))
+            await server.send_frame(result_view(page["idx"], frame["id"]))
+
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
+            stub.on_client_frame = on_input
+
+            await stub.send_job_transition(
+                _job(stub, job_id, node, "queued", shared=False), _busy_view(stub, job_id, node, "Starting…")
+            )
+            await stub.send_job_transition(
+                _job(stub, job_id, node, "result",
+                     result={"title": "Wi-Fi Scan", "total": 45, "cursor": "cur-2",
+                             "blocks": [{"type": "text", "text": "Live Scan Page 1"}]}),
+                result_view(0, stub.next_server_id()),
+            )
+            await _wait_until(lambda: "Live Scan Page 1" in _widget_text(app, "#screen-view"))
+            assert app.display_mode == "view"
+            assert "(page 1/3+)" in _widget_text(app, "#screen-view")
+
+            start_idx = len(stub.received_frames)
+            await pilot.press("down")
+            await _wait_until(lambda: "Live Scan Page 2" in _widget_text(app, "#screen-view"))
+            await pilot.press("down")
+            await _wait_until(lambda: "Live Scan Page 3" in _widget_text(app, "#screen-view"))
+            await pilot.press("up")
+            await _wait_until(lambda: "Live Scan Page 2" in _widget_text(app, "#screen-view"))
+
+            sent = stub.received_frames[start_idx:]
+            assert [f["key"] for f in sent if f["type"] == "input"] == ["down", "down", "up"]
+            assert not any(f["type"] == "page" for f in sent), "page frames would desync server cursor.page"
+            # Late job frame for the same job must not steal the screen back
+            await stub.send_frame(_job(stub, job_id, node, "result",
+                                       result={"title": "Wi-Fi Scan", "cursor": None,
+                                               "blocks": [{"type": "text", "text": "stale job page"}]}))
+            await pilot.pause(0.1)
+            assert app.display_mode == "view"
+            assert "Live Scan Page 2" in _widget_text(app, "#screen-view")
+
+
+async def test_m2_real_complications_payload_renders_in_footer(tmp_path: Path) -> None:
+    """M2: wlanpi-menud complications items {app_id,label,value,status} render."""
+    sock = tmp_path / "local.sock"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
+            await _wait_until(lambda: "Uplink: OK" in _widget_text(app, "#status-footer"))
+
+            await stub.send_frame({
+                "v": 1, "type": "event", "id": stub.next_server_id(), "topic": "complications", "seq": 2,
+                "data": [
+                    {"app_id": "gps", "label": "GPS", "value": "8 sats", "status": "ok"},
+                    {"app_id": "kismet", "label": "Kismet", "value": "off", "status": "unknown"},
+                ],
+            })
+            await _wait_until(lambda: "GPS: 8 sats" in _widget_text(app, "#status-footer"))
+            await pilot.pause()
+            footer = _widget_text(app, "#status-footer")
+            assert "Kismet: off" in footer
+            assert "Uplink" not in footer  # list replaced, not merged
+
+
+def _tall_menu_nodes() -> list[dict[str, Any]]:
+    """A menu comparable to wlanpi-menud's real tree (~70 nodes)."""
+    nodes: list[dict[str, Any]] = []
+    for b in range(6):
+        bid = f"b{b}"
+        nodes.append({"id": bid, "label": f"Branch {b}", "parent": None, "order": b, "kind": "branch"})
+        for a in range(11):
+            nodes.append({"id": f"{bid}.a{a}", "label": f"Action {b}.{a}", "parent": bid, "order": a,
+                          "kind": "action", "view": "kv", "mutates": False})
+    return nodes
+
+
+async def test_layout_80x32_result_visible_after_invoke_with_tall_menu(tmp_path: Path) -> None:
+    """On-device bug: at 32 rows arrow-key scrolling of the tree pane hid the result."""
+    sock = tmp_path / "local.sock"
+    node = "b5.a10"
+
+    def menu_view(frame_id: str, selected: int) -> dict[str, Any]:
+        items = [{"label": f"Action 5.{i}", "node": f"b5.a{i}"} for i in range(11)]
+        return {"v": 1, "type": "view", "id": frame_id, "screen": "menu", "node": items[selected]["node"],
+                "title": "Branch 5", "blocks": [{"type": "list", "selected": selected,
+                                                 "text": "\n".join(i["label"] for i in items), "items": items}]}
+
+    sel = {"i": 0}
+
+    async def flow(server: StubMenudServer, frame: dict[str, Any]) -> None:
+        if frame["type"] != "input":
+            return
+        if frame["key"] == "down":
+            sel["i"] = min(10, sel["i"] + 1)
+            await server.send_frame(menu_view(frame["id"], sel["i"]))
+        elif frame["key"] == "center":
+            await server.send_job_transition(
+                _job(server, "j-lay", node, "queued", shared=False), _busy_view(server, "j-lay", node, "Starting…")
+            )
+            await server.send_job_transition(
+                _job(server, "j-lay", node, "result",
+                     result={"title": "Layout Result", "blocks": [{"type": "text", "text": "RESULT-VISIBLE"}]}),
+                {"v": 1, "type": "view", "id": server.next_server_id(), "screen": "result", "node": node,
+                 "title": "Layout Result", "job_id": "j-lay",
+                 "blocks": [{"type": "text", "text": "RESULT-VISIBLE"}]},
+            )
+
+    async with StubMenudServer(sock) as stub:
+        stub.menu_nodes = _tall_menu_nodes()
+        stub.on_client_frame = flow
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(80, 32)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
+            await _wait_until(lambda: app.menu_tree is not None)
+            scroll = app.query_one("#main-scroll")
+            await pilot.pause()
+            assert scroll.max_scroll_y > 0, "menu tree must overflow the pane for this test to be meaningful"
+
+            await pilot.press(*(["down"] * 10))
+            await _wait_until(lambda: app.current_view is not None and app.current_view["node"] == node)
+            await pilot.press("enter")
+            await _wait_until(lambda: "RESULT-VISIBLE" in _widget_text(app, "#screen-view"))
+            await pilot.pause()
+
+            screen_view = app.query_one("#screen-view")
+            assert scroll.scroll_y == 0
+            visible = scroll.content_region
+            assert screen_view.region.y >= visible.y
+            assert screen_view.region.y < visible.bottom
+            # The result text is actually painted on the 80x32 screen
+            painted = app.export_screenshot()
+            assert "RESULT-VISIBLE" in painted

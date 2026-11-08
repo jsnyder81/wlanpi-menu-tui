@@ -171,12 +171,13 @@ class StubMenudServer:
                 "eth0": "192.0.2.10",
                 "cpu_temp": "46.5C",
             },
+            # Item shape published by wlanpi-menud Service.publish_complications
             "complications": [
                 {
-                    "provider": "acme",
-                    "key": "uplink",
-                    "text": "Uplink OK",
-                    "ttl_sec": 30,
+                    "app_id": "uplink",
+                    "label": "Uplink",
+                    "value": "OK",
+                    "status": "ok",
                 }
             ],
             "alerts": ["Low battery 15%"],
@@ -235,6 +236,22 @@ class StubMenudServer:
             raise RuntimeError("No active client connection on stub server")
         self.sent_frames.append(frame)
         await ws.send(json.dumps(frame))
+
+    async def send_job_transition(
+        self,
+        job_frame: dict[str, Any],
+        view_frame: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a job lifecycle transition the way wlanpi-menud does for thin sessions.
+
+        The real service (JobManager._broadcast -> Service.job_changed_for, and
+        Service._input) queues a ``job`` frame and then a thin-mode ``view``
+        frame (screen ``busy``/``result``, carrying ``job_id``) for the same
+        transition. Sending only one of the two hides client state bugs.
+        """
+        await self.send_frame(job_frame)
+        if view_frame is not None:
+            await self.send_frame(view_frame)
 
     async def wait_for_frame(
         self,
