@@ -19,8 +19,16 @@ PROTOCOL_DIR = (
     Path(__file__).resolve().parents[2] / "wlanpi-menud" / "protocol"
 )
 FRAMES_SCHEMA_PATH = PROTOCOL_DIR / "frames.schema.json"
+MENU_SCHEMA_PATH = PROTOCOL_DIR / "menu.schema.json"
 FRAMES_SCHEMA = json.loads(FRAMES_SCHEMA_PATH.read_text(encoding="utf-8"))
+MENU_SCHEMA = json.loads(MENU_SCHEMA_PATH.read_text(encoding="utf-8"))
 FRAME_VALIDATOR = Draft202012Validator(FRAMES_SCHEMA)
+PARAM_VALIDATOR = Draft202012Validator(
+    {"$schema": MENU_SCHEMA["$schema"], "$defs": MENU_SCHEMA["$defs"], "$ref": "#/$defs/param"}
+)
+CONFIRM_VALIDATOR = Draft202012Validator(
+    {"$schema": MENU_SCHEMA["$schema"], "$defs": MENU_SCHEMA["$defs"], "$ref": "#/$defs/confirm"}
+)
 
 C2S_TYPES = {
     "auth",
@@ -45,11 +53,21 @@ S2C_TYPES = {
 
 
 def validate_frame(frame: dict[str, Any], *, direction: str | None = None) -> None:
-    """Validate a frame against protocol/frames.schema.json."""
-    errors = list(FRAME_VALIDATOR.iter_errors(frame))
+    """Validate a frame against protocol/frames.schema.json and menu.schema.json param/confirm defs."""
+    current_frames_schema = json.loads(FRAMES_SCHEMA_PATH.read_text(encoding="utf-8"))
+    errors = list(Draft202012Validator(current_frames_schema).iter_errors(frame))
     if errors:
         msgs = "; ".join(f"{list(e.path)}: {e.message}" for e in errors)
         raise AssertionError(f"Frame failed schema validation: {msgs}\nFrame: {frame!r}")
+    if frame.get("type") == "menu":
+        for node in frame.get("nodes", []):
+            for param in node.get("params") or []:
+                PARAM_VALIDATOR.validate(param)
+            if node.get("confirm") is not None:
+                CONFIRM_VALIDATOR.validate(node["confirm"])
+    elif frame.get("type") == "prompt" and frame.get("kind") == "form":
+        for field_def in frame.get("fields") or []:
+            PARAM_VALIDATOR.validate(field_def)
     if direction == "c2s":
         assert frame["type"] in C2S_TYPES, f"Unexpected C2S frame type: {frame['type']}"
     elif direction == "s2c":
