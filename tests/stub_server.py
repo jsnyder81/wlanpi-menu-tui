@@ -168,7 +168,7 @@ class StubMenudServer:
             "device.summary": {
                 "hostname": "wlanpi-stub",
                 "mode": "classic",
-                "eth0": "192.0.2.10",
+                "ip": "192.0.2.10",
                 "cpu_temp": "46.5C",
             },
             # Item shape published by wlanpi-menud Service.publish_complications
@@ -180,7 +180,7 @@ class StubMenudServer:
                     "status": "ok",
                 }
             ],
-            "alerts": ["Low battery 15%"],
+            "alerts": [{"level": "warn", "message": "Low battery 15%"}],
         }
         self.resnapshot_jobs: list[dict[str, Any]] = []
         self.page_handlers: dict[tuple[str, str], dict[str, Any]] = {}

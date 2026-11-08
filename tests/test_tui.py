@@ -519,7 +519,7 @@ async def test_reconnect_resume_and_full_resnapshot(tmp_path: Path) -> None:
             stub.topic_snapshots["device.summary"] = {
                 "hostname": "wlanpi-resynced",
                 "mode": "wiperf",
-                "eth0": "198.51.100.7",
+                "ip": "198.51.100.7",
                 "cpu_temp": "51.0C",
             }
             start_idx = len(stub.received_frames)
