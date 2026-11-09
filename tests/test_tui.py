@@ -1181,3 +1181,48 @@ async def test_render_coalescing_burst(tmp_path: Path) -> None:
             assert app.current_view is not None and app.current_view.get("title") == "Screen 5"
             assert "Content 5" in _widget_text(app, "#screen-view")
 
+
+async def test_render_coalescing_latest_state(tmp_path: Path) -> None:
+    """Intermediate frames in a coalesced burst are never painted to the screen."""
+    sock = tmp_path / "local.sock"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        painted_screens: list[str] = []
+
+        orig_refresh = app._refresh_ui
+
+        def recording_refresh() -> None:
+            orig_refresh()
+            if app.is_mounted:
+                painted_screens.append(_widget_text(app, "#screen-view"))
+
+        app._refresh_ui = recording_refresh
+
+        async with app.run_test(size=(90, 28)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "hello")
+            await pilot.pause(0.1)
+            painted_screens.clear()
+
+            # Burst of 5 frames: 1 is leading, 2-4 are intermediate, 5 is latest
+            for i in range(1, 6):
+                await stub.send_frame({
+                    "v": 1,
+                    "type": "view",
+                    "id": f"burst:{i}",
+                    "screen": "menu",
+                    "title": f"Screen {i}",
+                    "blocks": [{"type": "text", "text": f"Content {i}"}],
+                })
+
+            await pilot.pause(0.15)
+
+            # Latest frame 5 is painted
+            assert "Content 5" in _widget_text(app, "#screen-view")
+            assert any("Content 5" in text for text in painted_screens), "Latest state Content 5 must be painted"
+
+            # Intermediate frames 2, 3, 4 were never painted to the screen
+            for intermediate in ("Content 2", "Content 3", "Content 4"):
+                assert not any(intermediate in text for text in painted_screens), (
+                    f"Intermediate state '{intermediate}' was painted; intermediate frames must never be painted"
+                )
+
