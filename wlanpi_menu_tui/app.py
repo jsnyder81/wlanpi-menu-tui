@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Collection
 from typing import Any, ClassVar
 
@@ -208,6 +209,32 @@ class MenuTuiApp(App[None]):
 
         # Menu tree visibility toggle ('t' key, hidden by default)
         self.show_menu_tree: bool = False
+
+        # Render coalescing (dirty flag on high-frequency view/event frames)
+        self._ui_dirty: bool = False
+        self._render_coalesce_sec: float = 0.06
+        self._last_view_render_time: float = 0.0
+        self._render_timer: Any = None
+        self.refresh_count: int = 0
+
+    def _flush_dirty_render(self) -> None:
+        self._render_timer = None
+        if self._ui_dirty:
+            self._ui_dirty = False
+            self._last_view_render_time = time.monotonic()
+            self._refresh_ui()
+
+    def _mark_dirty(self) -> None:
+        self._ui_dirty = True
+        now = time.monotonic()
+        elapsed = now - self._last_view_render_time
+        if elapsed >= self._render_coalesce_sec and self._render_timer is None:
+            self._ui_dirty = False
+            self._last_view_render_time = now
+            self._refresh_ui()
+        elif self._render_timer is None and self.is_mounted:
+            delay = max(0.005, self._render_coalesce_sec - elapsed)
+            self._render_timer = self.set_timer(delay, self._flush_dirty_render)
 
     def compose(self) -> ComposeResult:
         yield Static("WLAN Pi Menu TUI — Connecting...", id="header-bar")
@@ -441,7 +468,14 @@ class MenuTuiApp(App[None]):
                 self.fatal_error = True
                 self._stop_reconnect = True
 
-        self._refresh_ui()
+        if ftype in ("view", "event"):
+            self._mark_dirty()
+        else:
+            self._ui_dirty = False
+            if self._render_timer is not None:
+                self._render_timer.stop()
+                self._render_timer = None
+            self._refresh_ui()
 
     @property
     def attached(self) -> bool:
@@ -507,6 +541,7 @@ class MenuTuiApp(App[None]):
     def _refresh_ui(self) -> None:
         if not self.is_mounted:
             return
+        self.refresh_count += 1
         self.query_one("#header-bar", Static).update(self._render_header())
         self._update_error_banner()
         main_text = self._render_main_screen()

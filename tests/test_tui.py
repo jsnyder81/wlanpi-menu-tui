@@ -1151,3 +1151,33 @@ async def test_menu_tree_hidden_by_default_and_breadcrumbs_unaffected(tmp_path: 
             assert "t tree" in _widget_text(app, "#status-footer")
             # Breadcrumbs still intact
             assert "Network" in _widget_text(app, "#header-bar")
+
+
+async def test_render_coalescing_burst(tmp_path: Path) -> None:
+    sock = tmp_path / "local.sock"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(90, 28)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "hello")
+            await pilot.pause(0.1)
+            initial_refreshes = app.refresh_count
+
+            # Send burst of 5 view frames in quick succession
+            for i in range(1, 6):
+                await stub.send_frame({
+                    "v": 1,
+                    "type": "view",
+                    "id": f"burst:{i}",
+                    "screen": "menu",
+                    "title": f"Screen {i}",
+                    "blocks": [{"type": "text", "text": f"Content {i}"}],
+                })
+
+            # Wait for coalesce interval to flush
+            await pilot.pause(0.15)
+
+            burst_refreshes = app.refresh_count - initial_refreshes
+            assert burst_refreshes <= 2, f"Expected <= 2 refreshes, got {burst_refreshes}"
+            assert app.current_view is not None and app.current_view.get("title") == "Screen 5"
+            assert "Content 5" in _widget_text(app, "#screen-view")
+

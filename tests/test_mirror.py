@@ -94,9 +94,7 @@ async def test_mirror_renders_views_driven_elsewhere(tmp_path: Path) -> None:
             for sel in (1, 2):
                 await stub.send_frame(menu_view(stub, sel, driven_by={"principal": ALICE, "surface": "wlanpi-webui",
                                                                       "self": False}))
-                await _wait_until(lambda s=sel: app.current_view is not None
-                                  and app.current_view["blocks"][0]["selected"] == s)
-                await pilot.pause()
+                await _wait_until(lambda s=sel: ("> System" if s == 2 else "> Apps") in _widget_text(app, "#screen-view"))
                 screen = _widget_text(app, "#screen-view")
                 assert ("> System" if sel == 2 else "> Apps") in screen
             assert "driven by wlanpi-webui (webui:alice)" in _widget_text(app, "#header-bar")
@@ -120,8 +118,7 @@ async def test_confirmation_of_another_principal_is_not_answerable(tmp_path: Pat
             await _wait_until(lambda: app.attached)
             await stub.send_frame(confirm_prompt(stub, ALICE))
             await stub.send_frame(confirm_view(stub, answerable=False))
-            await _wait_until(lambda: app.current_view is not None and app.current_view["screen"] == "prompt")
-            await pilot.pause()
+            await _wait_until(lambda: "Reboot the WLAN Pi now?" in _widget_text(app, "#screen-view"))
             assert app.display_mode == "view" and app.active_prompt is None, "shown on the shared screen"
             assert "Reboot the WLAN Pi now?" in _widget_text(app, "#screen-view")
             n = len(stub.received_frames)
