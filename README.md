@@ -33,8 +33,12 @@ wlanpi-menu-tui --session new    # an independent session with its own cursor
 - **View block rendering**: Renders `text`, `kv`, `table`, `list`, `qr` (as
   Unicode text-art), `status`, `progress`, and `confirm` blocks, falling back to
   each block's `text` representation for unknown block types.
-- **Input mapping**: Maps arrow keys, Enter, and F1–F3/1–3 to protocol `input`
-  frames (`up`, `down`, `left`, `right`, `center`, `key1`–`key3`).
+- **Input mapping & keyboard shortcuts**: Maps arrow keys, Enter, and F1–F3/1–3
+  to protocol `input` frames (`up`, `down`, `left`, `right`, `center`, `key1`–`key3`).
+  `t` toggles the debug menu tree on/off (hidden by default).
+  `q` quits the application.
+  Inline confirmations support `left`/`right`, `y`/`n`, and Enter.
+  Cancellable jobs support `c`/Escape.
 - **Interactive prompts**: Handles server `prompt` frames (`select`, `confirm`,
   `form`, `integer`, `string`) and answers with `answer` frames.
 - **Job lifecycle & paging**: Displays `queued`, `progress`, `result`, `error`,

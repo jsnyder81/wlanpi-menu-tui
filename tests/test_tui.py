@@ -78,10 +78,27 @@ async def test_handshake_subscribe_and_status_footer(tmp_path: Path) -> None:
             assert "Uplink: OK" in footer_txt
             assert "Low battery 15%" in footer_txt
 
+            # Menu tree is hidden by default
+            assert _widget_text(app, "#menu-tree-view") == ""
+            assert "t tree" in footer_txt
+
+            # 't' toggles the menu tree panel on
+            await pilot.press("t")
+            await pilot.pause()
             tree_txt = _widget_text(app, "#menu-tree-view")
             assert "Menu Tree [rev 1] (classic)" in tree_txt
             assert "Network (network)" in tree_txt
             assert "Reboot (system.reboot) [confirm]" in tree_txt
+
+            # Footer hint hides 't tree' when tree is shown
+            footer_txt_shown = _widget_text(app, "#status-footer")
+            assert "t tree" not in footer_txt_shown
+
+            # 't' toggles the menu tree panel back off
+            await pilot.press("t")
+            await pilot.pause()
+            assert _widget_text(app, "#menu-tree-view") == ""
+            assert "t tree" in _widget_text(app, "#status-footer")
 
 
 async def test_all_block_types_and_unknown_fallback(tmp_path: Path) -> None:
@@ -1068,6 +1085,8 @@ async def test_layout_80x32_result_visible_after_invoke_with_tall_menu(tmp_path:
         async with app.run_test(size=(80, 32)) as pilot:
             await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
             await _wait_until(lambda: app.menu_tree is not None)
+            await pilot.press("t")
+            await pilot.pause()
             scroll = app.query_one("#main-scroll")
             await pilot.pause()
             assert scroll.max_scroll_y > 0, "menu tree must overflow the pane for this test to be meaningful"
@@ -1086,3 +1105,49 @@ async def test_layout_80x32_result_visible_after_invoke_with_tall_menu(tmp_path:
             # The result text is actually painted on the 80x32 screen
             painted = app.export_screenshot()
             assert "RESULT-VISIBLE" in painted
+
+
+async def test_menu_tree_hidden_by_default_and_breadcrumbs_unaffected(tmp_path: Path) -> None:
+    sock = tmp_path / "local.sock"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(90, 28)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
+            await _wait_until(lambda: app.menu_tree is not None)
+
+            # Send a view frame without explicit breadcrumb, but with node
+            # Header breadcrumb should derive from app.menu_tree even though tree view is hidden
+            view_frame = {
+                "v": 1,
+                "type": "view",
+                "id": stub.next_server_id(),
+                "screen": "menu",
+                "node": "network.interfaces",
+                "title": "Interfaces",
+                "blocks": [{"type": "text", "text": "WLAN Interfaces"}],
+            }
+            await stub.send_frame(view_frame)
+            await _wait_until(lambda: "Interfaces" in _widget_text(app, "#header-bar"))
+            await pilot.pause()
+
+            # Tree is hidden
+            assert _widget_text(app, "#menu-tree-view") == ""
+            # Header breadcrumb contains Network › Wi-Fi Interfaces (from menu_tree)
+            header_txt = _widget_text(app, "#header-bar")
+            assert "Network" in header_txt
+            # Keybar hint contains 't tree'
+            assert "t tree" in _widget_text(app, "#status-footer")
+
+            # Toggle tree on
+            await pilot.press("t")
+            await pilot.pause()
+            assert "Menu Tree" in _widget_text(app, "#menu-tree-view")
+            assert "t tree" not in _widget_text(app, "#status-footer")
+
+            # Toggle tree off
+            await pilot.press("t")
+            await pilot.pause()
+            assert _widget_text(app, "#menu-tree-view") == ""
+            assert "t tree" in _widget_text(app, "#status-footer")
+            # Breadcrumbs still intact
+            assert "Network" in _widget_text(app, "#header-bar")

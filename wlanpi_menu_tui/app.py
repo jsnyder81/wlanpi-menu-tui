@@ -206,6 +206,9 @@ class MenuTuiApp(App[None]):
         self.last_error: dict[str, Any] | None = None
         self.fatal_error: bool = False
 
+        # Menu tree visibility toggle ('t' key, hidden by default)
+        self.show_menu_tree: bool = False
+
     def compose(self) -> ComposeResult:
         yield Static("WLAN Pi Menu TUI — Connecting...", id="header-bar")
         yield Static("", id="error-banner")
@@ -779,7 +782,7 @@ class MenuTuiApp(App[None]):
         return str(val)
 
     def _render_menu_tree_section(self) -> str:
-        if self.menu_tree is None:
+        if not self.show_menu_tree or self.menu_tree is None:
             return ""
         selected_node = self.current_view.get("node") if self.current_view else None
         tree_lines = self.menu_tree.render_tree_lines(selected_node_id=selected_node)
@@ -832,7 +835,11 @@ class MenuTuiApp(App[None]):
         if self.current_view and isinstance(self.current_view.get("hints"), dict):
             for k, v in self.current_view["hints"].items():
                 hint_parts.append(f"[bold]{escape(str(k))}[/bold]:{escape(str(v))}")
-        hint_parts.append("[dim]↑↓←→/Enter nav · F1-F3 key1-3 · q quit[/dim]")
+        keys_hint = "↑↓←→/Enter nav · F1-F3 key1-3"
+        if not self.show_menu_tree:
+            keys_hint += " · t tree"
+        keys_hint += " · q quit"
+        hint_parts.append(f"[dim]{keys_hint}[/dim]")
         hints_line = "  ".join(hint_parts)
 
         return f"{status_line}\n{hints_line}"
@@ -877,6 +884,12 @@ class MenuTuiApp(App[None]):
 
         if key == "q" and self.active_prompt is None:
             self.exit()
+            return
+
+        if key == "t" and self.active_prompt is None:
+            event.stop()
+            self.show_menu_tree = not self.show_menu_tree
+            self._refresh_ui()
             return
 
         # 1. Active server prompt frame
