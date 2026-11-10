@@ -1,0 +1,29 @@
+Source: wlanpi-menu-tui
+Section: contrib/python
+Priority: optional
+Maintainer: Jake Snyder <jsnyder81@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-virtualenv (>= 1.2),
+               python3 (>= 3.13),
+               python3-dev,
+               python3-setuptools,
+               python3-venv
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+X-Python3-Version: >= 3.13
+Homepage: https://github.com/WLAN-Pi/wlanpi-menu-tui
+
+Package: wlanpi-menu-tui
+Architecture: any
+Pre-Depends: dpkg (>= 1.16.1),
+             python3 (>= 3.13),
+             ${misc:Pre-Depends}
+Depends: ${misc:Depends},
+         ${shlibs:Depends}
+Recommends: wlanpi-menud
+Description: WLAN Pi menu terminal client
+ Textual thin-mode client for wlanpi-menud, run from an SSH session. It
+ connects to /run/wlanpi-menud/local.sock and renders the same menu as the
+ front panel and the WebUI. Users in the wlanpi-menud group may connect.
+ .
+ No service, no network listener, no hardware access.

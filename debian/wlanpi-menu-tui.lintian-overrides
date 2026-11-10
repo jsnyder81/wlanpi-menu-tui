@@ -1,0 +1,17 @@
+# WLAN Pi FHS policy: the application and its venv live in /opt/wlanpi-menu-tui.
+wlanpi-menu-tui: dir-or-file-in-opt [opt/wlanpi-menu-tui/*]
+# Documented in README.md and --help; WLAN Pi tools ship no man pages.
+wlanpi-menu-tui: no-manual-page [usr/bin/wlanpi-menu-tui]
+# The private virtualenv under /opt/wlanpi-menu-tui (dh-virtualenv) carries
+# upstream wheels as-is. Everything below is a property of that tree.
+#
+# Byte-code ships on purpose: /opt is root-owned and SSH users cannot
+# write it, so Python could not cache it at run time.
+wlanpi-menu-tui: package-installs-python-pycache-dir [opt/wlanpi-menu-tui/*]
+# Entry points use the venv's own interpreter.
+wlanpi-menu-tui: unusual-interpreter * [opt/wlanpi-menu-tui/*]
+wlanpi-menu-tui: executable-not-elf-or-script [opt/wlanpi-menu-tui/*]
+wlanpi-menu-tui: script-not-executable [opt/wlanpi-menu-tui/*]
+wlanpi-menu-tui: extra-license-file [opt/wlanpi-menu-tui/*]
+wlanpi-menu-tui: package-contains-documentation-outside-usr-share-doc [opt/wlanpi-menu-tui/*]
+wlanpi-menu-tui: hardening-no-bindnow [opt/wlanpi-menu-tui/*]

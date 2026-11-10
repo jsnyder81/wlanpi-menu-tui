@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Collection
 from typing import Any, ClassVar
 
@@ -205,6 +206,35 @@ class MenuTuiApp(App[None]):
         # Error state
         self.last_error: dict[str, Any] | None = None
         self.fatal_error: bool = False
+
+        # Menu tree visibility toggle ('t' key, hidden by default)
+        self.show_menu_tree: bool = False
+
+        # Render coalescing (dirty flag on high-frequency view/event frames)
+        self._ui_dirty: bool = False
+        self._render_coalesce_sec: float = 0.06
+        self._last_view_render_time: float = 0.0
+        self._render_timer: Any = None
+        self.refresh_count: int = 0
+
+    def _flush_dirty_render(self) -> None:
+        self._render_timer = None
+        if self._ui_dirty:
+            self._ui_dirty = False
+            self._last_view_render_time = time.monotonic()
+            self._refresh_ui()
+
+    def _mark_dirty(self) -> None:
+        self._ui_dirty = True
+        now = time.monotonic()
+        elapsed = now - self._last_view_render_time
+        if elapsed >= self._render_coalesce_sec and self._render_timer is None:
+            self._ui_dirty = False
+            self._last_view_render_time = now
+            self._refresh_ui()
+        elif self._render_timer is None and self.is_mounted:
+            delay = max(0.005, self._render_coalesce_sec - elapsed)
+            self._render_timer = self.set_timer(delay, self._flush_dirty_render)
 
     def compose(self) -> ComposeResult:
         yield Static("WLAN Pi Menu TUI — Connecting...", id="header-bar")
@@ -438,7 +468,14 @@ class MenuTuiApp(App[None]):
                 self.fatal_error = True
                 self._stop_reconnect = True
 
-        self._refresh_ui()
+        if ftype in ("view", "event"):
+            self._mark_dirty()
+        else:
+            self._ui_dirty = False
+            if self._render_timer is not None:
+                self._render_timer.stop()
+                self._render_timer = None
+            self._refresh_ui()
 
     @property
     def attached(self) -> bool:
@@ -504,6 +541,7 @@ class MenuTuiApp(App[None]):
     def _refresh_ui(self) -> None:
         if not self.is_mounted:
             return
+        self.refresh_count += 1
         self.query_one("#header-bar", Static).update(self._render_header())
         self._update_error_banner()
         main_text = self._render_main_screen()
@@ -779,7 +817,7 @@ class MenuTuiApp(App[None]):
         return str(val)
 
     def _render_menu_tree_section(self) -> str:
-        if self.menu_tree is None:
+        if not self.show_menu_tree or self.menu_tree is None:
             return ""
         selected_node = self.current_view.get("node") if self.current_view else None
         tree_lines = self.menu_tree.render_tree_lines(selected_node_id=selected_node)
@@ -832,7 +870,11 @@ class MenuTuiApp(App[None]):
         if self.current_view and isinstance(self.current_view.get("hints"), dict):
             for k, v in self.current_view["hints"].items():
                 hint_parts.append(f"[bold]{escape(str(k))}[/bold]:{escape(str(v))}")
-        hint_parts.append("[dim]↑↓←→/Enter nav · F1-F3 key1-3 · q quit[/dim]")
+        keys_hint = "↑↓←→/Enter nav · F1-F3 key1-3"
+        if not self.show_menu_tree:
+            keys_hint += " · t tree"
+        keys_hint += " · q quit"
+        hint_parts.append(f"[dim]{keys_hint}[/dim]")
         hints_line = "  ".join(hint_parts)
 
         return f"{status_line}\n{hints_line}"
@@ -877,6 +919,12 @@ class MenuTuiApp(App[None]):
 
         if key == "q" and self.active_prompt is None:
             self.exit()
+            return
+
+        if key == "t" and self.active_prompt is None:
+            event.stop()
+            self.show_menu_tree = not self.show_menu_tree
+            self._refresh_ui()
             return
 
         # 1. Active server prompt frame

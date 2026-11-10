@@ -111,10 +111,10 @@ async def test_two_attached_mirror_and_one_independent(menud: Path) -> None:
         await _wait_until(lambda: b.current_view["node"] == "network", timeout=5)
         await pa.press("enter")
         await _wait_until(lambda: b.current_view.get("breadcrumb") == ["Network"], timeout=5)
-        for _ in range(5):
+        for _ in range(3):
             await pa.press("down")
         await _wait_until(lambda: b.current_view["node"] == "network.lldp", timeout=5)
-        dump.append(side_by_side("A: left, up, enter, down x5 -> Network > LLDP Neighbour", apps))
+        dump.append(side_by_side("A: left, up, enter, down x3 -> Network > LLDP Neighbour", apps))
         await step("A presses enter: LLDP runs, result mirrored on B", pa, "enter",
                    lambda: b.current_view["screen"] == "result" and "sw1" in screen(b))
         assert "sw1" in screen(a) and "sw1" not in screen(n)

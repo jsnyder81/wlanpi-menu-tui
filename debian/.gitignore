@@ -1,0 +1,7 @@
+wlanpi-menu-tui.*.debhelper
+wlanpi-menu-tui.substvars
+wlanpi-menu-tui/
+.debhelper/
+files
+debhelper-build-stamp
+*.log

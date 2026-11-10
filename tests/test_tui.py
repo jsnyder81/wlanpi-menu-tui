@@ -78,10 +78,27 @@ async def test_handshake_subscribe_and_status_footer(tmp_path: Path) -> None:
             assert "Uplink: OK" in footer_txt
             assert "Low battery 15%" in footer_txt
 
+            # Menu tree is hidden by default
+            assert _widget_text(app, "#menu-tree-view") == ""
+            assert "t tree" in footer_txt
+
+            # 't' toggles the menu tree panel on
+            await pilot.press("t")
+            await pilot.pause()
             tree_txt = _widget_text(app, "#menu-tree-view")
             assert "Menu Tree [rev 1] (classic)" in tree_txt
             assert "Network (network)" in tree_txt
             assert "Reboot (system.reboot) [confirm]" in tree_txt
+
+            # Footer hint hides 't tree' when tree is shown
+            footer_txt_shown = _widget_text(app, "#status-footer")
+            assert "t tree" not in footer_txt_shown
+
+            # 't' toggles the menu tree panel back off
+            await pilot.press("t")
+            await pilot.pause()
+            assert _widget_text(app, "#menu-tree-view") == ""
+            assert "t tree" in _widget_text(app, "#status-footer")
 
 
 async def test_all_block_types_and_unknown_fallback(tmp_path: Path) -> None:
@@ -1068,6 +1085,8 @@ async def test_layout_80x32_result_visible_after_invoke_with_tall_menu(tmp_path:
         async with app.run_test(size=(80, 32)) as pilot:
             await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
             await _wait_until(lambda: app.menu_tree is not None)
+            await pilot.press("t")
+            await pilot.pause()
             scroll = app.query_one("#main-scroll")
             await pilot.pause()
             assert scroll.max_scroll_y > 0, "menu tree must overflow the pane for this test to be meaningful"
@@ -1086,3 +1105,124 @@ async def test_layout_80x32_result_visible_after_invoke_with_tall_menu(tmp_path:
             # The result text is actually painted on the 80x32 screen
             painted = app.export_screenshot()
             assert "RESULT-VISIBLE" in painted
+
+
+async def test_menu_tree_hidden_by_default_and_breadcrumbs_unaffected(tmp_path: Path) -> None:
+    sock = tmp_path / "local.sock"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(90, 28)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "subscribe")
+            await _wait_until(lambda: app.menu_tree is not None)
+
+            # Send a view frame without explicit breadcrumb, but with node
+            # Header breadcrumb should derive from app.menu_tree even though tree view is hidden
+            view_frame = {
+                "v": 1,
+                "type": "view",
+                "id": stub.next_server_id(),
+                "screen": "menu",
+                "node": "network.interfaces",
+                "title": "Interfaces",
+                "blocks": [{"type": "text", "text": "WLAN Interfaces"}],
+            }
+            await stub.send_frame(view_frame)
+            await _wait_until(lambda: "Interfaces" in _widget_text(app, "#header-bar"))
+            await pilot.pause()
+
+            # Tree is hidden
+            assert _widget_text(app, "#menu-tree-view") == ""
+            # Header breadcrumb contains Network › Wi-Fi Interfaces (from menu_tree)
+            header_txt = _widget_text(app, "#header-bar")
+            assert "Network" in header_txt
+            # Keybar hint contains 't tree'
+            assert "t tree" in _widget_text(app, "#status-footer")
+
+            # Toggle tree on
+            await pilot.press("t")
+            await pilot.pause()
+            assert "Menu Tree" in _widget_text(app, "#menu-tree-view")
+            assert "t tree" not in _widget_text(app, "#status-footer")
+
+            # Toggle tree off
+            await pilot.press("t")
+            await pilot.pause()
+            assert _widget_text(app, "#menu-tree-view") == ""
+            assert "t tree" in _widget_text(app, "#status-footer")
+            # Breadcrumbs still intact
+            assert "Network" in _widget_text(app, "#header-bar")
+
+
+async def test_render_coalescing_burst(tmp_path: Path) -> None:
+    sock = tmp_path / "local.sock"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        async with app.run_test(size=(90, 28)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "hello")
+            await pilot.pause(0.1)
+            initial_refreshes = app.refresh_count
+
+            # Send burst of 5 view frames in quick succession
+            for i in range(1, 6):
+                await stub.send_frame({
+                    "v": 1,
+                    "type": "view",
+                    "id": f"burst:{i}",
+                    "screen": "menu",
+                    "title": f"Screen {i}",
+                    "blocks": [{"type": "text", "text": f"Content {i}"}],
+                })
+
+            # Wait for coalesce interval to flush
+            await pilot.pause(0.15)
+
+            burst_refreshes = app.refresh_count - initial_refreshes
+            assert burst_refreshes <= 2, f"Expected <= 2 refreshes, got {burst_refreshes}"
+            assert app.current_view is not None and app.current_view.get("title") == "Screen 5"
+            assert "Content 5" in _widget_text(app, "#screen-view")
+
+
+async def test_render_coalescing_latest_state(tmp_path: Path) -> None:
+    """Intermediate frames in a coalesced burst are never painted to the screen."""
+    sock = tmp_path / "local.sock"
+    async with StubMenudServer(sock) as stub:
+        app = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)
+        painted_screens: list[str] = []
+
+        orig_refresh = app._refresh_ui
+
+        def recording_refresh() -> None:
+            orig_refresh()
+            if app.is_mounted:
+                painted_screens.append(_widget_text(app, "#screen-view"))
+
+        app._refresh_ui = recording_refresh
+
+        async with app.run_test(size=(90, 28)) as pilot:
+            await stub.wait_for_frame(lambda f: f["type"] == "hello")
+            await pilot.pause(0.1)
+            painted_screens.clear()
+
+            # Burst of 5 frames: 1 is leading, 2-4 are intermediate, 5 is latest
+            for i in range(1, 6):
+                await stub.send_frame({
+                    "v": 1,
+                    "type": "view",
+                    "id": f"burst:{i}",
+                    "screen": "menu",
+                    "title": f"Screen {i}",
+                    "blocks": [{"type": "text", "text": f"Content {i}"}],
+                })
+
+            await pilot.pause(0.15)
+
+            # Latest frame 5 is painted
+            assert "Content 5" in _widget_text(app, "#screen-view")
+            assert any("Content 5" in text for text in painted_screens), "Latest state Content 5 must be painted"
+
+            # Intermediate frames 2, 3, 4 were never painted to the screen
+            for intermediate in ("Content 2", "Content 3", "Content 4"):
+                assert not any(intermediate in text for text in painted_screens), (
+                    f"Intermediate state '{intermediate}' was painted; intermediate frames must never be painted"
+                )
+
