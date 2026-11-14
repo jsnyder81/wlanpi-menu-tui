@@ -7,8 +7,15 @@ from typing import Any
 
 from rich.markup import escape
 
+from wlanpi_menu_tui.complications import level_markup
 from wlanpi_menu_tui.protocol import SUPPORTED_BLOCKS, MenuTreeState
 from wlanpi_menu_tui.qr import render_qr_text_art
+
+
+def is_rule_label(label: str) -> bool:
+    """A ``- - fits above - -`` style separator row (Home tiles capacity mark)."""
+    s = label.strip()
+    return len(s) > 4 and s.startswith("- -") and s.endswith("- -")
 
 
 def _format_scalar(val: Any) -> str:
@@ -48,7 +55,7 @@ def render_kv_block(block: dict[str, Any], *, reveal_secrets: bool = False) -> s
         if secret and not reveal_secrets:
             val_str = "••••••••"
         else:
-            val_str = escape(raw_val)
+            val_str = level_markup(item.get("level"), escape(raw_val))
         pad = " " * max(1, key_width - len(key) + 2)
         lines.append(f"  [bold]{escape(key)}:[/bold]{pad}{val_str}")
     return "\n".join(lines)
@@ -144,7 +151,9 @@ def render_list_block(
         branch_suffix = " ▸" if is_branch else ""
         detail_suffix = f" [dim]({escape(str(detail))})[/dim]" if detail else ""
         is_sel = selected is not None and int(selected) == idx
-        if is_sel:
+        if is_rule_label(label) and not is_sel:
+            lines.append(f"   [dim]{escape(label)}[/dim]")
+        elif is_sel:
             lines.append(
                 f"[bold reverse] > {escape(label)}{branch_suffix} [/bold reverse]{detail_suffix}"
             )

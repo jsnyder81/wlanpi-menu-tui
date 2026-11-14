@@ -9,7 +9,9 @@ Set ``LIVE_DUMP=<path>`` to also write the side-by-side screen dump.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -128,3 +130,98 @@ async def test_two_attached_mirror_and_one_independent(menud: Path) -> None:
     print("\n" + text)
     if os.environ.get("LIVE_DUMP"):
         Path(os.environ["LIVE_DUMP"]).write_text(text)
+
+
+# ---------------------------------------------------------------- complications (spec §4, §6.3)
+
+SERVE_TUI = Path(__file__).resolve().parent / "serve_menud.py"
+CLI = MENUD / ".venv" / "bin" / "wlanpi-complication"
+
+
+@pytest.fixture
+async def menud_state():
+    """The real service via serve_fake, with the layout file in the temp dir (no root)."""
+    d = Path(tempfile.mkdtemp(prefix="menud-cx-"))
+    proc = await asyncio.create_subprocess_exec(str(MENUD_PY), str(SERVE_TUI), str(d), cwd=str(MENUD),
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    assert proc.stdout is not None
+    line = (await asyncio.wait_for(proc.stdout.readline(), 15)).decode().strip()
+    assert line.startswith("READY "), line
+    yield Path(line.split(" ", 1)[1]), d / "complications.json"
+    proc.terminate()
+    await proc.wait()
+    shutil.rmtree(d, ignore_errors=True)
+
+
+def footer(app: MenuTuiApp) -> str:
+    return _widget_text(app, "#status-footer").splitlines()[0]
+
+
+async def publish(sock: Path, *args: str) -> None:
+    proc = await asyncio.create_subprocess_exec(str(CLI), "--socket", str(sock), "publish", *args,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, err = await proc.communicate()
+    assert proc.returncode == 0, (out, err)
+
+
+async def test_complications_footer_and_home_tiles_live(menud_state) -> None:
+    import pwd
+
+    sock, layout = menud_state
+    user = re.sub(r"[^a-z0-9_]", "_", pwd.getpwuid(os.getuid()).pw_name.lower())
+    a = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05)                 # attached
+    n = MenuTuiApp(socket_path=str(sock), reconnect_delay=0.05, session="new")  # independent
+    async with a.run_test(size=(140, 34)) as pa, n.run_test(size=(140, 34)) as pn:
+        await _wait_until(lambda: all("Temp: 48C" in footer(x) for x in (a, n)), timeout=10)
+        assert a.complications_v2 and n.complications_v2
+        # tui profile at the shipped default: mode, eth0, ip, cpu_temp, plugin.*, local.*
+        line = footer(n)
+        order = ["wlanpi-test", "Mode: Classic", "eth0: 192.0.2.10", "IP: 192.0.2.10", "Temp: 48C"]
+        assert [line.index(s) for s in order] == sorted(line.index(s) for s in order), line
+        assert "CPU" not in line and "Profiler" not in line  # not selected
+        assert "mode:Classic" not in line                    # legacy summary keys not drawn twice
+
+        # A provider tile through the real CLI, with status vocabulary glyphs.
+        await publish(sock, f"local.{user}.demo", "--label", "Demo", "--value", "[red]12 ms", "--status", "warn")
+        await _wait_until(lambda: "Demo:" in footer(n) and "Demo:" in footer(a), timeout=5)
+        assert "▲ Demo: [red]12 ms" in footer(n)  # escaped, warn marker
+        assert footer(n).index("Temp") < footer(n).index("Demo")  # local.* after the exact ids
+
+        # Home tiles from the independent session (keyboard only): hide eth0.
+        await n.invoke_node("system.home_tiles")
+        await _wait_until(lambda: n.active_prompt is not None and n.active_prompt["title"] == "Home tiles", timeout=5)
+        assert "Tui" in screen(n) and "Reset to default" in screen(n)
+        await pn.press("enter")
+        await _wait_until(lambda: n.active_prompt is not None and n.active_prompt["title"] == "Tui", timeout=5)
+        assert "1 Mode" in screen(n) and "(hidden)" in screen(n)
+        await pn.press("down")
+        await pn.press("enter")
+        await _wait_until(lambda: n.active_prompt is not None and n.active_prompt["title"] == "eth0", timeout=5)
+        assert "Hide" in screen(n) and "Move up" in screen(n)
+        await pn.press("enter")  # Hide
+        await _wait_until(lambda: n.active_prompt is not None and n.active_prompt["title"] == "Tui", timeout=5)
+        # Back on the list with the cursor on the same tile, now hidden.
+        opts = n.active_prompt["options"]
+        assert opts[n.prompt_cursor]["value"] == "tile:wlanpi.eth0"
+        assert opts[n.prompt_cursor].get("detail") == "hidden"
+
+        # Both TUIs repaint from complications.config, without reconnecting.
+        await _wait_until(lambda: "eth0:" not in footer(n) and "eth0:" not in footer(a), timeout=5)
+        assert "Mode: Classic" in footer(a) and "IP: 192.0.2.10" in footer(a)
+        assert "wlanpi.eth0" not in json.loads(layout.read_text())["surfaces"]["tui"]["show"]
+
+        await pn.press("escape")
+        await _wait_until(lambda: n.active_prompt is not None and n.active_prompt["title"] == "Home tiles", timeout=5)
+        await pn.press("down")
+        await pn.press("enter")  # Reset to default
+        await _wait_until(lambda: "eth0: 192.0.2.10" in footer(n) and "eth0:" in footer(a), timeout=5)
+
+        # The attached TUI edits the default session's panel profiles on the shared screen.
+        await a.invoke_node("system.home_tiles")
+        await _wait_until(lambda: a.current_view.get("screen") == "prompt"
+                          and a.current_view.get("title") == "Home tiles", timeout=5)
+        assert "Rows" in screen(a) and "Status strip" in screen(a)
+        await pa.press("enter")
+        await _wait_until(lambda: a.current_view.get("title") == "Rows", timeout=5)
+        assert "1 Mode" in screen(a)
+        print("\n" + "\n".join([footer(a), footer(n), screen(a)]))
