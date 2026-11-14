@@ -46,6 +46,15 @@ wlanpi-menu-tui --session new    # an independent session with its own cursor
   `page` frames while bounding cached result pages to 4.
 - **Status footer**: Subscribes to `device.summary`, `alerts`, and
   `complications` topics and renders live status, complications, and alerts.
+- **Complications (`tui` profile)**: When `welcome.features` lists
+  `complications.2`, the TUI also subscribes to `complications.live`,
+  `complications.catalog` and `complications.config`. The footer then shows the
+  hostname, then the tiles the `tui` profile selects, in profile order. Tiles
+  are added until the line is full, up to 8. Each tile is styled by status with
+  a marker (`✓` ok, `▲` warn, `✗` error, `○` off, `?` unknown), and provider text
+  is escaped. A layout edited elsewhere repaints the footer live. Against an
+  older service the footer is unchanged. Menu > System > Home tiles (a
+  service-run node) works by keyboard. Home rows show their `kv` `level`.
 - **Reconnect & error handling**: Automatically reconnects on transient drops,
   accepts full resnapshots when `resumed` is `false`, detects sequence gaps, and
   presents readable diagnostics for protocol errors including `VERSION` and

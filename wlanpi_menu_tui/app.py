@@ -18,7 +18,8 @@ from textual.widgets import Static
 from websockets.asyncio.client import connect, unix_connect
 from websockets.exceptions import ConnectionClosed
 
-from wlanpi_menu_tui.blocks import render_blocks
+from wlanpi_menu_tui import complications as C
+from wlanpi_menu_tui.blocks import is_rule_label, render_blocks
 from wlanpi_menu_tui.protocol import (
     DEFAULT_SOCKET_PATH,
     DEFAULT_TOPICS,
@@ -167,6 +168,8 @@ class MenuTuiApp(App[None]):
         self.roles: list[str] = []
         self.negotiated_version: int | None = None
         self.resumed: bool | None = None
+        # welcome.features: "complications.2" turns on the profile footer.
+        self.features: list[str] = []
 
         # Menu, view, job, prompt, topic state
         self.menu_tree: MenuTreeState | None = None
@@ -250,6 +253,23 @@ class MenuTuiApp(App[None]):
     def _next_id(self) -> str:
         self._msg_counter += 1
         return f"c{self._msg_counter}"
+
+    @property
+    def complications_v2(self) -> bool:
+        """The service speaks the complications spec (welcome.features)."""
+        return C.FEATURE in self.features
+
+    def _topics_to_subscribe(self) -> list[str]:
+        # An old service answers an unknown topic with a null snapshot and no
+        # error, so the new topics are asked for only when it announces them.
+        topics = list(self.subscribe_topics)
+        if self.complications_v2:
+            topics += [t for t in C.TOPICS if t not in topics]
+        return topics
+
+    def on_resize(self, event: events.Resize) -> None:
+        # The footer's tile count depends on its width.
+        self._mark_dirty()
 
     async def _send_frame(self, frame: dict[str, Any]) -> bool:
         ws = self._ws
@@ -370,6 +390,7 @@ class MenuTuiApp(App[None]):
             self.roles = list(frame.get("roles", []))
             self.negotiated_version = frame.get("version")
             self.resumed = bool(frame.get("resumed", False))
+            self.features = [str(f) for f in (frame.get("features") or [])]
 
             if not self.resumed:
                 # Full resnapshot follows on mismatch or initial connect
@@ -381,7 +402,7 @@ class MenuTuiApp(App[None]):
                     self.active_job_id = None
                 # Subscribe on initial connect or if no topics were tracked yet
                 if not had_resume or not self.topic_seq:
-                    sub = build_subscribe(self._next_id(), self.subscribe_topics)
+                    sub = build_subscribe(self._next_id(), self._topics_to_subscribe())
                     await self._send_frame(sub)
 
         elif ftype == "menu":
@@ -509,7 +530,12 @@ class MenuTuiApp(App[None]):
 
         kind = prompt.get("kind")
         default_val = prompt.get("default")
-        if kind == "integer":
+        if kind == "select" and default_val is not None:
+            # e.g. Home tiles returns to its list with the cursor on the same tile
+            values = [opt.get("value") for opt in prompt.get("options") or []]
+            if default_val in values:
+                self.prompt_cursor = values.index(default_val)
+        elif kind == "integer":
             init_int = default_val if isinstance(default_val, int) else (prompt.get("minimum") or 0)
             self.prompt_scalar_value = str(init_int)
         elif kind == "string":
@@ -753,7 +779,9 @@ class MenuTuiApp(App[None]):
                 label = str(opt.get("label", ""))
                 detail = opt.get("detail")
                 detail_str = f" [dim]({escape(str(detail))})[/dim]" if detail else ""
-                if idx == self.prompt_cursor:
+                if is_rule_label(label) and idx != self.prompt_cursor:
+                    lines.append(f"   [dim]{escape(label)}[/dim]")
+                elif idx == self.prompt_cursor:
                     lines.append(f"[bold reverse] > {escape(label)} [/bold reverse]{detail_str}")
                 else:
                     lines.append(f"   {escape(label)}{detail_str}")
@@ -823,11 +851,55 @@ class MenuTuiApp(App[None]):
         tree_lines = self.menu_tree.render_tree_lines(selected_node_id=selected_node)
         return "\n".join(escape(line) for line in tree_lines)
 
+    def _alert_parts(self) -> list[tuple[str, int]]:
+        alerts = self.topic_data.get("alerts")
+        out: list[tuple[str, int]] = []
+        if isinstance(alerts, list):
+            for alert in alerts:
+                if isinstance(alert, dict):
+                    msg = str(alert.get("message") or alert.get("text") or alert)
+                else:
+                    msg = str(alert)
+                out.append((f"[bold red]! {escape(msg)}[/bold red]", len(msg) + 2))
+        return out
+
+    def _profile_footer_parts(self, summary: Any, live: list[Any]) -> list[str]:
+        """Hostname (fixed chrome), then the ``tui`` profile's tiles in order,
+        cut to what fits, then alerts. Alerts take room before tiles do."""
+        sep = len(C.SEPARATOR)
+        width = self._footer_width()
+        head: list[str] = []
+        used = 0
+        if isinstance(summary, dict) and summary.get("hostname"):
+            host = str(summary["hostname"])
+            head.append(escape(host))
+            used += len(host)
+        alerts = self._alert_parts()
+        for _, n in alerts:
+            used += n + sep
+        if self.stale_topics:
+            used += len(",".join(sorted(self.stale_topics))) + 9 + sep
+        room = width - used - (sep if head else 0)
+        tiles = C.resolved_tiles(live, self.topic_data.get(C.TOPIC_CONFIG))
+        return head + C.fit_tiles(tiles, room) + [m for m, _ in alerts]
+
+    def _footer_width(self) -> int:
+        try:
+            width = self.query_one("#status-footer", Static).size.width
+        except Exception:
+            width = 0
+        if width:
+            return width
+        return max(20, self.size.width - 2) if self.is_mounted else 78
+
     def _render_status_footer(self) -> str:
         line1_parts: list[str] = []
 
         summary = self.topic_data.get("device.summary")
-        if isinstance(summary, dict):
+        live = self.topic_data.get(C.TOPIC_LIVE)
+        if self.complications_v2 and isinstance(live, list):
+            line1_parts.extend(self._profile_footer_parts(summary, live))
+        elif isinstance(summary, dict):
             for key in ("hostname", "mode", "eth0", "ip", "cpu_temp"):
                 if key in summary and summary[key] is not None:
                     val = str(summary[key])
@@ -837,7 +909,7 @@ class MenuTuiApp(App[None]):
                         line1_parts.append(f"{escape(key)}:{escape(val)}")
 
         complications = self.topic_data.get("complications")
-        if isinstance(complications, list):
+        if not (self.complications_v2 and isinstance(live, list)) and isinstance(complications, list):
             for comp in complications:
                 if isinstance(comp, dict):
                     # wlanpi-menud publishes {app_id, label, value, status}
@@ -850,7 +922,7 @@ class MenuTuiApp(App[None]):
                         line1_parts.append(f"[cyan]{escape(str(txt))}[/cyan]")
 
         alerts = self.topic_data.get("alerts")
-        if isinstance(alerts, list) and alerts:
+        if isinstance(alerts, list) and alerts and not (self.complications_v2 and isinstance(live, list)):
             for alert in alerts:
                 if isinstance(alert, dict):
                     msg = alert.get("message") or alert.get("text") or str(alert)

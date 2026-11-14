@@ -160,6 +160,9 @@ class StubMenudServer:
         # wlanpi-menud does; legacy_welcome leaves it out like a pre-sessions server.
         self.legacy_welcome: bool = False
         self.session_kind: str | None = None
+        # welcome.features (e.g. ["complications.2"]); None leaves it out like
+        # a service that predates the complications spec.
+        self.features: list[str] | None = None
         self.force_resnapshot: bool = False
         self.send_initial_view: bool = True
         self.initial_view: dict[str, Any] | None = None
@@ -352,6 +355,8 @@ class StubMenudServer:
             }
             if not self.legacy_welcome:
                 welcome["session"] = self.session_kind
+            if self.features is not None:
+                welcome["features"] = list(self.features)
             await self.send_frame(welcome)
 
             if not resumed:
